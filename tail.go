@@ -18,6 +18,7 @@ import (
 	"github.com/hpcloud/tail/ratelimiter"
 	"github.com/hpcloud/tail/util"
 	"github.com/hpcloud/tail/watch"
+	"golang.org/x/text/encoding"
 	"gopkg.in/tomb.v1"
 )
 
@@ -63,6 +64,12 @@ type Config struct {
 	Poll        bool      // Poll for file changes instead of using inotify
 	Pipe        bool      // Is a named pipe (mkfifo)
 	RateLimiter *ratelimiter.LeakyBucket
+
+	// Encoding sets the encoding of the tailed file.
+	// It is not guaranteed the underlying reader reads from the start of the file.
+	// Thus byte order marks (BOM) are not supported. Setting unicode.UseBOM can lead
+	// to unexpected results.
+	Encoding encoding.Encoding
 
 	// Generic IO
 	Follow      bool // Continue looking for new lines (tail -f)
@@ -380,11 +387,16 @@ func (tail *Tail) waitForChanges() error {
 }
 
 func (tail *Tail) openReader() {
+	encReader := io.Reader(tail.file)
+	if tail.Encoding != nil {
+		encReader = tail.Encoding.NewDecoder().Reader(tail.file)
+	}
+
 	if tail.MaxLineSize > 0 {
 		// add 2 to account for newline characters
-		tail.reader = bufio.NewReaderSize(tail.file, tail.MaxLineSize+2)
+		tail.reader = bufio.NewReaderSize(encReader, tail.MaxLineSize+2)
 	} else {
-		tail.reader = bufio.NewReader(tail.file)
+		tail.reader = bufio.NewReader(encReader)
 	}
 }
 

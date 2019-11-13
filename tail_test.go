@@ -14,6 +14,9 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/text/encoding"
+	"golang.org/x/text/encoding/unicode"
+
 	"github.com/hpcloud/tail/ratelimiter"
 	"github.com/hpcloud/tail/watch"
 )
@@ -223,11 +226,19 @@ func TestReOpenPolling(t *testing.T) {
 // (detected via renames), so test these explicitly.
 
 func TestReSeekInotify(t *testing.T) {
-	reSeek(t, false)
+	reSeek(t, false, nil)
 }
 
 func TestReSeekPolling(t *testing.T) {
-	reSeek(t, true)
+	reSeek(t, true, nil)
+}
+
+func TestReSeekInotifyUTF16(t *testing.T) {
+	reSeek(t, false, unicode.UTF16(unicode.LittleEndian, unicode.IgnoreBOM))
+}
+
+func TestReSeekPollingUTF16(t *testing.T) {
+	reSeek(t, true, unicode.UTF16(unicode.LittleEndian, unicode.IgnoreBOM))
 }
 
 func TestRateLimiting(t *testing.T) {
@@ -404,21 +415,37 @@ func TestInotify_WaitForCreateThenMove(t *testing.T) {
 	tailTest.Cleanup(tail, false)
 }
 
-func reSeek(t *testing.T, poll bool) {
+func reSeek(t *testing.T, poll bool, encoding encoding.Encoding) {
+	encode := func(s string) string {
+		if encoding == nil {
+			return s
+		}
+
+		encoded, err := encoding.NewEncoder().String(s)
+		if err != nil {
+			t.Fatalf("Unexpected error while encoding '%s': %s", s, err)
+		}
+		return encoded
+	}
+
 	var name string
 	if poll {
 		name = "reseek-polling"
 	} else {
 		name = "reseek-inotify"
 	}
+	if encoding != nil {
+		name += "-with-encoding"
+	}
+
 	tailTest := NewTailTest(name, t)
-	tailTest.CreateFile("test.txt", "a really long string goes here\nhello\nworld\n")
+	tailTest.CreateFile("test.txt", encode("a really long string goes here\nhello 🏳️‍🌈\nworld\n"))
 	tail := tailTest.StartTail(
 		"test.txt",
-		Config{Follow: true, ReOpen: false, Poll: poll})
+		Config{Follow: true, ReOpen: false, Poll: poll, Encoding: encoding})
 
 	go tailTest.VerifyTailOutput(tail, []string{
-		"a really long string goes here", "hello", "world", "h311o", "w0r1d", "endofworld"}, false)
+		"a really long string goes here", "hello 🏳️‍🌈", "world", "h311o", "w0r1d", "endofworld"}, false)
 
 	// truncate now
 	<-time.After(100 * time.Millisecond)
@@ -548,8 +575,8 @@ func (t TailTest) ReadLines(tail *Tail, lines []string) {
 		if tailedLine.Text != line {
 			t.Fatalf(
 				"unexpected line/err from tail: "+
-					"expecting <<%s>>>, but got <<<%s>>>",
-				line, tailedLine.Text)
+					"expecting <<%s>>>, but got <<<%s>>> %v --- %v",
+				line, tailedLine.Text, []byte(line), []byte(tailedLine.Text))
 		}
 	}
 }
