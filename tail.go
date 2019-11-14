@@ -161,7 +161,30 @@ func (tail *Tail) Tell() (offset int64, err error) {
 		return
 	}
 
-	offset -= int64(tail.reader.Buffered())
+	if tail.Encoding == nil {
+		offset -= int64(tail.reader.Buffered())
+		return
+	}
+
+	lr := io.LimitReader(tail.reader, int64(tail.reader.Buffered()))
+
+	c := new(counter)
+	_, err = io.Copy(tail.Encoding.NewEncoder().Writer(c), lr)
+	if err != nil {
+		return
+	}
+
+	offset -= c.n
+	return
+}
+
+type counter struct {
+	n int64
+}
+
+func (c *counter) Write(p []byte) (n int, err error) {
+	n = len(p)
+	c.n += int64(n)
 	return
 }
 

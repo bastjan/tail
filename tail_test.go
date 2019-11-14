@@ -14,11 +14,10 @@ import (
 	"testing"
 	"time"
 
-	"golang.org/x/text/encoding"
-	"golang.org/x/text/encoding/unicode"
-
 	"github.com/hpcloud/tail/ratelimiter"
 	"github.com/hpcloud/tail/watch"
+	"golang.org/x/text/encoding"
+	"golang.org/x/text/encoding/unicode"
 )
 
 func init() {
@@ -226,19 +225,11 @@ func TestReOpenPolling(t *testing.T) {
 // (detected via renames), so test these explicitly.
 
 func TestReSeekInotify(t *testing.T) {
-	reSeek(t, false, nil)
+	reSeek(t, false)
 }
 
 func TestReSeekPolling(t *testing.T) {
-	reSeek(t, true, nil)
-}
-
-func TestReSeekInotifyUTF16(t *testing.T) {
-	reSeek(t, false, unicode.UTF16(unicode.LittleEndian, unicode.IgnoreBOM))
-}
-
-func TestReSeekPollingUTF16(t *testing.T) {
-	reSeek(t, true, unicode.UTF16(unicode.LittleEndian, unicode.IgnoreBOM))
+	reSeek(t, true)
 }
 
 func TestRateLimiting(t *testing.T) {
@@ -269,10 +260,31 @@ func TestRateLimiting(t *testing.T) {
 	tailTest.Cleanup(tail, true)
 }
 
-func TestTell(t *testing.T) {
+func TestTellDefaultEncoding(t *testing.T) {
+	testTell(t, nil)
+}
+
+func TestTellUTF16Encoding(t *testing.T) {
+	testTell(t, unicode.UTF16(unicode.BigEndian, unicode.IgnoreBOM))
+}
+
+func testTell(t *testing.T, enc encoding.Encoding) {
+	encode := func(s string) string {
+		if enc == nil {
+			return s
+		}
+
+		se, err := enc.NewEncoder().String(s)
+		if err != nil {
+			t.Fatalf("Error while encoding '%s': %s", s, err)
+		}
+		return se
+	}
+
 	tailTest := NewTailTest("tell-position", t)
-	tailTest.CreateFile("test.txt", "hello\nworld\nagain\nmore\n")
+	tailTest.CreateFile("test.txt", encode("hello🏳️‍🌈🏳️‍🌈🏳️‍🌈\nworld\nagain\nmore\n"))
 	config := Config{
+		Encoding: enc,
 		Follow:   false,
 		Location: &SeekInfo{0, os.SEEK_SET}}
 	tail := tailTest.StartTail("test.txt", config)
@@ -287,12 +299,13 @@ func TestTell(t *testing.T) {
 
 	config = Config{
 		Follow:   false,
+		Encoding: enc,
 		Location: &SeekInfo{offset, os.SEEK_SET}}
 	tail = tailTest.StartTail("test.txt", config)
 	for l := range tail.Lines {
 		// it may readed one line in the chan(tail.Lines),
 		// so it may lost one line.
-		if l.Text != "world" && l.Text != "again" {
+		if l.Text != encode("world") && l.Text != encode("again") {
 			tailTest.Fatalf("mismatch; expected world or again, but got %s",
 				l.Text)
 		}
@@ -415,37 +428,21 @@ func TestInotify_WaitForCreateThenMove(t *testing.T) {
 	tailTest.Cleanup(tail, false)
 }
 
-func reSeek(t *testing.T, poll bool, encoding encoding.Encoding) {
-	encode := func(s string) string {
-		if encoding == nil {
-			return s
-		}
-
-		encoded, err := encoding.NewEncoder().String(s)
-		if err != nil {
-			t.Fatalf("Unexpected error while encoding '%s': %s", s, err)
-		}
-		return encoded
-	}
-
+func reSeek(t *testing.T, poll bool) {
 	var name string
 	if poll {
 		name = "reseek-polling"
 	} else {
 		name = "reseek-inotify"
 	}
-	if encoding != nil {
-		name += "-with-encoding"
-	}
-
 	tailTest := NewTailTest(name, t)
-	tailTest.CreateFile("test.txt", encode("a really long string goes here\nhello 🏳️‍🌈\nworld\n"))
+	tailTest.CreateFile("test.txt", "a really long string goes here\nhello\nworld\n")
 	tail := tailTest.StartTail(
 		"test.txt",
-		Config{Follow: true, ReOpen: false, Poll: poll, Encoding: encoding})
+		Config{Follow: true, ReOpen: false, Poll: poll})
 
 	go tailTest.VerifyTailOutput(tail, []string{
-		"a really long string goes here", "hello 🏳️‍🌈", "world", "h311o", "w0r1d", "endofworld"}, false)
+		"a really long string goes here", "hello", "world", "h311o", "w0r1d", "endofworld"}, false)
 
 	// truncate now
 	<-time.After(100 * time.Millisecond)
@@ -575,8 +572,8 @@ func (t TailTest) ReadLines(tail *Tail, lines []string) {
 		if tailedLine.Text != line {
 			t.Fatalf(
 				"unexpected line/err from tail: "+
-					"expecting <<%s>>>, but got <<<%s>>> %v --- %v",
-				line, tailedLine.Text, []byte(line), []byte(tailedLine.Text))
+					"expecting <<%s>>>, but got <<<%s>>>",
+				line, tailedLine.Text)
 		}
 	}
 }
